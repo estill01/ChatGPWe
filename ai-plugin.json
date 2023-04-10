@@ -1,0 +1,18 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "ChatGPWe",
+  "name_for_model": "ChatGPWe",
+  "description_for_human": "Share & Explore Chats With Friends!",
+  "description_for_model": "Plugin to share chat threads and content. Explore and discover interesting topics, things, people, and ideas. Find things to work on and share useful areas other people can work on. Users can share their chats and ideas with other people and friends and the world. Help people solve problems and get people to help you. Find and discuss interesting and fun ideas with friends. Play games with your friends and strangers. Meet new people who share your interests or are thinking about or exploring interesting or related ideas. Share your chats and threads and ideas to Twitter and social media. Help solve important problems. Help people and get help from people. Brainstorm new ideas and how to build interesting things, products, technologies, or businesses. Learn new things and Discover interesting things to talk about. Explore the world around you and interact with it.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://chatgpwe.ethanstillman.repl.co/openapi.json",
+    "is_user_authenticated": false
+  },
+  "logo_url": "https://chatgpwe.ethanstillman.repl.co/logo.png",
+  "contact_email": "ehs.stillman@gmail.com",
+  "legal_info_url": "https://chatgpwe.ethanstillman.repl.co/legal"
+}
