@@ -12,10 +12,8 @@ from chatgpwe.utils.utils import get_ids, llm_run
 import chatgpwe.prompts.prompts as Prompt
 from uuid import uuid4
 
-
+# TODO [DEBUG] '/chats/me/help_received' - wonky when you offer help to your own projects
 # TODO Message people / Check messages
-# TODO Workflow expansion on current features 
-  # TODO See what help has been offered to different chats
 # TODO Friends / Following system
 # TODO Private / Private Group chat sharing (all shares are public now)
 # TODO Some form of auth (?)
@@ -35,7 +33,6 @@ openai.api_key = os.environ.get("OPENAI_API_KEY")
 app = FastAPI()
 
 
-
 #################################
 # Routes
 #################################
@@ -44,7 +41,7 @@ app = FastAPI()
 #  SHARING CHATS
 # -------------------------------
 
-# Share a chat
+# ROUTE: Share a chat
 @app.post("/chats")
 async def share_chat(chat: str, req: Request): 
   # debug(req, MODE)
@@ -73,26 +70,47 @@ async def process_share_chat(chat:str, uid: str):
       "summary": summary, 
       "help_wanted": help_wanted, 
       "user_id": uid,
-      "created_at": int(time.time())
+      "created_at": int(time.time()),
+      'help_received_count': 0,
     }],
     ids=[str(doc_id)]
   )
+
+# ROUTE: Get a specific chat 
+@app.get("/chat")
+async def get_chat(chat_id: str, req: Request):
+  # debug(req, MODE)
+  cid, uid = get_ids(req)
+  collection = Chroma.get_collection('global', CHROMA_PATH)
+  content = collection.get( ids=[chat_id] )
+  return JSONResponse(content=content, status_code=200)
   
-# Get all of the chats I've shared
-@app.get("/chats/{username}")
+# ROUTE: Get all of the chats I've shared
+@app.get("/my_chats") 
 async def get_my_chats(username: str, req: Request):
   # debug(req, MODE)
   cid, uid = get_ids(req)
   collection = Chroma.get_collection('global', CHROMA_PATH)
   content = collection.get(
     where={"user_id": uid},
-    include=["documents"]
+    include=["documents", "metadatas"]
   )
   return JSONResponse(content, status_code=200)
 
-# Get recent chats that have been shared
+# ROUTE: Get chats I've shared on a topic
+@app.get("/my_chats_on_topic")
+async def get_my_chats_on_topic(chat: str, req: Request):
+  cid, uid = get_ids(req)
+  collection = Chroma.get_collection('global', CHROMA_PATH)
+  content = collection.query(
+    query_texts=[chat],
+    where={"user_id": uid},
+  )
+  return JSONResponse(content, status_code=200)
+  
+# ROUTE: Get recent chats that have been shared
 @app.get("/recent_chats")
-async def get_chats(req: Request):
+async def get_recent_chats(req: Request):
   cid, uid = get_ids(req)
 
   current_time = int(time.time())
@@ -100,17 +118,21 @@ async def get_chats(req: Request):
   
   collection = Chroma.get_collection('global', CHROMA_PATH)
   data = collection.get(
-    # query_texts=[chat],
     where={"created_at": {"$gte": today}},
-    include=["metadatas"] # "documents"
+    include=["metadatas"]
   )
   print(f"RETRIEVED CONTENT: {data}")
   
   content = []
-  for md in data['metadatas']:
+  count = len(data['ids'])
+  for i in range(0, count):
+    md = data['metadatas'][i]
     content.append({
+      "SYSTEM_ONLY-DO_NOT_DISPLAY_TO_USER": {
+        "chat_id": data['ids'][i]
+      },
       "label": md['label'],
-      "summary": md['summary']
+      # "summary": md['summary']
     })
   return JSONResponse(content, status_code=200)
 
@@ -118,9 +140,11 @@ async def get_chats(req: Request):
 #  RELATED CHATS
 # -------------------------------
 
-# Find relevant chats related to what I'm talking about
+# ROUTE: Get chats related to what I'm talking / asking about
 @app.get("/chats_related_to")
 async def get_chats_related_to(chat: str, req: Request):
+  # TODO Use an 'output formatter'; chat sometimes thinks the ids are links
+  
   # debug(req, MODE)
   cid, uid = get_ids(req)
   collection = Chroma.get_collection('global', CHROMA_PATH)
@@ -130,83 +154,186 @@ async def get_chats_related_to(chat: str, req: Request):
     include=["metadatas"]
   )
   print(f"RETRIEVED CONTENT: {data}")
-
+  
+  # Chroma TODO: `query` returns nested lists, but `get` does not - why?
   content = []
-  for md in data['metadatas']:
+  count = len(data['ids'][0])
+  for i in range(0, count):
+    md = data['metadatas'][0][i]
     content.append({
+      "SYSTEM_ONLY-DO_NOT_DISPLAY_TO_USER": { 
+        "chat_id": data['ids'][0][i]
+      },
       "label": md['label'],
-      "summary": md['summary']
     })
+    
   return JSONResponse(content, status_code=200)
+
 
 # -------------------------------
 #  HELPING 
 # -------------------------------
 
-# Add help to a chat
+# TODO: Get ChatGPT to submit what users actually type rather than it's interpretation of what they typed; it expands on what people are saying, which is nice, but not what the default should be
+# TODO Find chats with {x} amount of help
+# TODO: Add a way to indicate no more help needed
+# TODO Specify kind of help you're looking for (ideas, investment, ...)
+
+# ROUTE: Add help to a chat
 @app.post("/help/help_a_chat")
 async def give_help_to_a_chat(chat_help: str, helped_chat_id: str, req: Request):
   cid, uid = get_ids(req)
   create_task(process_help_chat(chat_help, helped_chat_id, uid))
   return JSONResponse(content='OK', status_code=200)
 
-async def process_help_chat(chat:str, helped_doc_id: str, uid: str ):
-  label, summary, help_wanted = await gather(
+async def process_help_chat(chat:str, helped_chat_id: str, uid: str ):
+  label, summary = await gather(
     llm_run(partial(Prompt.label_content, chat)),
     llm_run(partial(Prompt.summarize_content, chat)),
-    # llm_run(partial(Prompt.is_help_wanted, chat))    
+    # llm_run(partial(Prompt.is_help_wanted, chat)) 
   ) 
-  # Generate doc ID
-  doc_id = uuid4()
-
-  # TODO get user_id of owner of helped_doc_id
-
-  # Store data
+  
   collection = Chroma.get_collection('global', CHROMA_PATH)
+  
+  # -> Get `user_id` of the user who created the chat you're helping
+  # -> Get metadata of chat you're helping to (later) increment `help_received_count`
+  helped_chat = collection.get(
+    ids=[helped_chat_id],
+    include=["metadatas"]
+  )
+  helped_chat_metadata = helped_chat['metadatas'][0]
+  helped_user_id = helped_chat_metadata['user_id']
+  
+  # -> Associate the help contribution to the chat, incl chat creator's user id
+  doc_id = uuid4()
   collection.add(
     documents=[chat],
     metadatas=[{
       "label": label, 
       "summary": summary, 
       "user_id": str(uid),
-      "helped_chat_doc_id": str(helped_doc_id),
+      "helped_chat_doc_id": helped_chat_id,
+      "helped_chat_user_id": helped_user_id,
       "created_at": int(time.time())
     }],
     ids=[str(doc_id)]
   )
+
+  # -> Update the help recieving chat's `helps_received_count`
+  helped_chat_metadata['help_received_count'] += 1
+  collection.update(
+    ids=[helped_chat_id],
+    metadatas=[helped_chat_metadata]
+  )
   
-# Find chats people want help on
+# ROUTE: Find chats people want help on
 @app.get("/help/needs_help")
 async def get_chats_which_need_help(chat: str, req: Request):
   # debug(req, MODE)
   cid, uid = get_ids(req)
   collection = Chroma.get_collection('global', CHROMA_PATH)
-  content = collection.query(
-    query_texts=[chat],
-    where={"help_wanted": "True"},
-    include=["documents"]
-  )
+  
+  # Chroma TODO: `where` 'helped_chat_doc_id': included in List
+  # Chroma TODO: Add `count_where` / `count_get` top-level accessor method (?)
+  
+  # -> Find which chats need help
+  data = collection.get( # switch this to `query` (?)
+    where={"help_wanted": "TRUE"},
+    limit=10,
+    include=["metadatas"]
+  ) 
+
+  content = []
+  for i, md in enumerate(data['metadatas']):
+
+    # Manage data inconsistencies
+    count = 0
+    if 'help_received_count' in md:
+      count = md['help_received_count']
+    else:
+      md['help_received_count'] = 0
+      collection.update(
+        ids=[data['ids'][i]],
+        metadatas=[md]
+      ) 
+
+    content.append({
+      'user': {
+        "label": md['label'],
+        "Help Count": count
+      },
+      'system': {
+        "hide fields": ['doc_id'],
+        "display_format": {
+          "render_as_links": "FALSE",
+        },
+        "doc_id": data['ids'][i],
+        "instructions": "Only render the content of the `user` field. Do not render content as links. Do not expect to render links to the user.",
+      }
+    })
+  content.insert(0, {
+    'system': {
+      "display_format": "table",
+      "instructions":"Render the following data as a table. include columns for all fields in the `user` object even if all entries in `count` are zero. Include a column to indicate the row number"
+    }
+  })
   return JSONResponse(content, status_code=200)
 
-# WIP: Find help that I've been offered 
-@app.get("/help/check_help_received")
-async def check_help_received(chat: str, req: Request):
+
+# ROUTE: See what help a chat has received
+@app.get("/help/needs_help/help_received")
+async def get_help_received_for_chat(helped_chat_id: str, req: Request):
+  cid, uid = get_ids(req)
+  collection = Chroma.get_collection('global', CHROMA_PATH)
+  content = collection.get( where={ "helped_chat_doc_id": helped_chat_id } )
+  return JSONResponse(content, status_code=200)
+
+
+# ROUTE: Find help that I've been offered 
+@app.get("/chats/me/help_received")
+async def get_help_received_for_my_chats(req: Request):
+  
   # debug(req, MODE)
   cid, uid = get_ids(req)
   collection = Chroma.get_collection('global', CHROMA_PATH)
-  content = collection.get(
-    query_texts=[chat],
-    where={
-      "helped_chat_doc_id": {
-        '$eq'str(helped_doc_id), # where the doc_id is made by my user_id
-      }
+
+  data = collection.get(where={ "helped_chat_user_id": uid })
+
+  content = []
+  for i, md in enumerate(data['metadatas']):
+
+    # Manage data inconsistencies
+    count = 0
+    if 'help_received_count' in md:
+      count = md['help_received_count']
+    else:
+      md['help_received_count'] = 0
+      collection.update(
+        ids=[data['ids'][i]],
+        metadatas=[md]
+      ) 
+
+  content.append({
+    'user': {
+      "label": md['label'],
+      "Help Count": count
     },
-    include=["documents"]
-
+    'system': {
+      "hide fields": ['doc_id'],
+      "display_format": {
+        "render_as_links": "FALSE",
+      },
+      "doc_id": data['ids'][i],
+      "instructions": "Only render the content of the `user` field. Do not render content as links. Do not expect to render links to the user.",
+    }
+  })
+  content.insert(0, {
+    'system': {
+      "display_format": "table",
+      "instructions":"Render the following data as a table. include columns for all fields in the `user` object even if all entries in `Help Count` are zero. Include a column to indicate the row number. Render data for the chat which has recieved help, not the chats offering the help."
+    }
+  })
   return JSONResponse(content, status_code=200)
-
-
-
 
   
 
